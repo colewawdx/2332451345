@@ -6,9 +6,10 @@ jobs:
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
-      - name: Build dylib
+      - name: Build dylib (iOS SDK)
         run: |
-          clang -arch arm64 -dynamiclib -framework Foundation \
+          xcrun -sdk iphoneos clang -arch arm64 -dynamiclib \
+            -framework Foundation -framework UIKit \
             -o SatProUnlock.dylib SatProUnlock.m
           file SatProUnlock.dylib
       - uses: actions/upload-artifact@v4
