@@ -3,7 +3,6 @@
 // Use file-based log instead: write to Documents/SatPro.log, view via Files app / Feather.
 #import <Foundation/Foundation.h>
 #import <objc/runtime.h>
-#import <UIKit/UIKit.h>
 
 static NSMutableArray *gLog;
 
@@ -12,26 +11,10 @@ static void Log(NSString *s) {
     NSLog(@"[SatPro] %@", s);
 }
 
-static void ShowAlert(void) {
-    dispatch_async(dispatch_get_main_queue(), ^{
-        NSString *msg = [gLog componentsJoinedByString:@"\n"];
-        UIAlertController *a = [UIAlertController alertControllerWithTitle:@"SatPro v3"
-            message:msg preferredStyle:UIAlertControllerStyleAlert];
-        [a addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
-        UIWindow *w = nil;
-        for (UIScene *sc in [UIApplication sharedApplication].connectedScenes) {
-            if ([sc isKindOfClass:[UIWindowScene class]]) {
-                w = ((UIWindowScene *)sc).keyWindow;
-                if (w) break;
-            }
-        }
-        if (!w) w = [UIApplication sharedApplication].keyWindow;
-        [w.rootViewController presentViewController:a animated:YES completion:nil];
-        // show again after 5s in case missed
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 5*NSEC_PER_SEC), dispatch_get_main_queue(), ^{
-            [w.rootViewController presentViewController:a animated:YES completion:nil];
-        });
-    });
+static void DumpLog(void) {
+    NSString *p = [NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject
+        stringByAppendingPathComponent:@"SatPro.log"];
+    [[gLog componentsJoinedByString:@"\n"] writeToFile:p atomically:YES encoding:NSUTF8StringEncoding error:nil];
 }
 
 static NSDictionary *FakeActive(void) {
