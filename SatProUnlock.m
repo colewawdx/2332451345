@@ -1,4 +1,6 @@
 // SatProUnlock v3 — on-screen status (no PC tools needed) + presentPaywall kill + entitlement hooks.
+// NOTE: macOS clang has no UIKit. Alert via CFUserNotification (available on iOS, compiles on macOS SDK? No).
+// Use file-based log instead: write to Documents/SatPro.log, view via Files app / Feather.
 #import <Foundation/Foundation.h>
 #import <objc/runtime.h>
 #import <UIKit/UIKit.h>
