@@ -1,6 +1,7 @@
 // SatProUnlock v6 — no block swizzles. Only: (1) log classes, (2) kill paywall presentation (void methods only).
 #import <Foundation/Foundation.h>
 #import <objc/runtime.h>
+#import <UIKit/UIKit.h>
 
 static NSMutableArray *gLog;
 static void L(NSString *s) { [gLog addObject:s]; NSLog(@"[SatPro] %@", s); }
