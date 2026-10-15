@@ -49,8 +49,9 @@ __attribute__((constructor)) static void Init(void) {
     }
     // 3) allEntitlements / all fallback
     if (cls) {
-        for (const char *nm in (const char *[]){"all", "allEntitlements"}) {
-            SEL sel = sel_registerName(nm);
+        const char *names[] = {"all", "allEntitlements"};
+        for (int i = 0; i < 2; i++) {
+            SEL sel = sel_registerName(names[i]);
             Method m = class_getInstanceMethod(cls, sel);
             if (m) {
                 IMP imp = imp_implementationWithBlock(^NSDictionary *(id self_) {
