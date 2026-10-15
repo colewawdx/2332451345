@@ -42,7 +42,7 @@ __attribute__((constructor)) static void Init(void) {
             NSString *name = NSStringFromSelector(method_getName(ms[i]));
             if ([name containsString:@"ustomerInfo"]) {
                 [gLog addObject:[@"INST " stringByAppendingString:name]];
-                if ([name containsString:@"resolve:"]) {
+                if ([name isEqualToString:@"customerInfoWithResolve:reject:"]) {
                     method_setImplementation(ms[i], imp_implementationWithBlock(^void(id s, id a, id r, id j) {
                         if (r) ((void(^)(id))r)(FakeInfo());
                     }));
