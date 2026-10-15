@@ -1,6 +1,20 @@
-// SatProUnlock FINAL — silent unlock, no popups, no logs.
+// SatProUnlock v9-diag
 #import <Foundation/Foundation.h>
 #import <objc/runtime.h>
+#import <UIKit/UIKit.h>
+#import <stdarg.h>
+
+static NSMutableArray *gLog;
+static NSTimeInterval gT0;
+
+static void L(NSString *fmt, ...) {
+    va_list ap; va_start(ap, fmt);
+    NSString *s = [[NSString alloc] initWithFormat:fmt arguments:ap];
+    va_end(ap);
+    if (gLog.count < 80) {
+        [gLog addObject:[NSString stringWithFormat:@"%4.1fs %@", [NSDate timeIntervalSinceReferenceDate] - gT0, s]];
+    }
+}
 
 static NSDictionary *FakeInfo(void) {
     return @{
@@ -37,32 +51,106 @@ static NSDictionary *FakeInfo(void) {
     };
 }
 
+static IMP Replace(Class c, SEL sel, IMP newImp) {
+    Method m = class_getInstanceMethod(c, sel);
+    if (!m) return NULL;
+    IMP old = method_getImplementation(m);
+    const char *types = method_getTypeEncoding(m);
+    if (class_addMethod(c, sel, newImp, types)) {
+        return old;
+    }
+    method_setImplementation(m, newImp);
+    return old;
+}
+
+static IMP gSend, gUpdated;
+
+static void SendHook(id self, SEL _cmd, NSString *name, id body) {
+    if ([name containsString:@"CustomerInfo"]) {
+        if ([body isKindOfClass:[NSDictionary class]]) {
+            L(@"SEND %@ keys=%@", name, [[(NSDictionary *)body allKeys] componentsJoinedByString:@"|"]);
+        } else {
+            L(@"SEND %@ class=%@", name, [body class]);
+        }
+        L(@"SEND %@ -> swapped", name);
+        if (gSend) ((void(*)(id,SEL,id,id))gSend)(self, _cmd, name, FakeInfo());
+    } else {
+        static int cnt = 0;
+        if (cnt++ < 25) L(@"SEND %@", name);
+        if (gSend) ((void(*)(id,SEL,id,id))gSend)(self, _cmd, name, body);
+    }
+}
+
+static void UpdatedHook(id self, SEL _cmd, id purchases, id info) {
+    L(@"DELEGATE receivedUpdatedCustomerInfo");
+    if (gUpdated) ((void(*)(id,SEL,id,id))gUpdated)(self, _cmd, purchases, info);
+}
+
+static void PromiseHook(id self, SEL _cmd, id resolve, id reject) {
+    L(@"PROMISE customerInfo -> fake");
+    if (resolve) ((void(^)(id))resolve)(FakeInfo());
+}
+
+static void PaywallNoop(id self, SEL _cmd) { L(@"PAYWALL call blocked"); }
+static void InvalidateNoop(id self, SEL _cmd) { L(@"invalidateCache called"); }
+
+static void Show(void) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        NSString *msg = [gLog componentsJoinedByString:@"\n"];
+        [[UIPasteboard generalPasteboard] setString:msg];
+        UIAlertController *a = [UIAlertController alertControllerWithTitle:@"SatPro v9-diag"
+            message:[msg stringByAppendingString:@"\n(copied)"] preferredStyle:UIAlertControllerStyleAlert];
+        [a addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
+        [a addAction:[UIAlertAction actionWithTitle:@"Refresh" style:UIAlertActionStyleDefault handler:^(UIAlertAction *act){ Show(); }]];
+        UIWindow *w = nil;
+        for (UIScene *sc in [UIApplication sharedApplication].connectedScenes) {
+            if ([sc isKindOfClass:[UIWindowScene class]]) { w = ((UIWindowScene *)sc).keyWindow; if (w) break; }
+        }
+        if (!w) w = [UIApplication sharedApplication].windows.firstObject;
+        if (w && w.rootViewController) [w.rootViewController presentViewController:a animated:YES completion:nil];
+    });
+}
+
 __attribute__((constructor)) static void Init(void) {
-    // Kill paywall presentation (void methods only, no crash risk)
+    gLog = [NSMutableArray array];
+    gT0 = [NSDate timeIntervalSinceReferenceDate];
+    L(@"v9 loaded");
+
+    int paywallHooks = 0;
     for (NSString *cn in @[@"RCPaywalls", @"RNPaywalls"]) {
         Class c = objc_getClass([cn UTF8String]);
-        if (!c) continue;
+        if (!c) { L(@"no class %@", cn); continue; }
         for (NSNumber *isMeta in @[@0, @1]) {
             Class k = [isMeta boolValue] ? object_getClass(c) : c;
             unsigned int n = 0;
             Method *ms = class_copyMethodList(k, &n);
             for (unsigned int i = 0; i < n; i++) {
                 NSString *name = NSStringFromSelector(method_getName(ms[i]));
-                char ret = *method_copyReturnType(ms[i]);
+                char *rt = method_copyReturnType(ms[i]);
+                char ret = *rt;
+                free(rt);
                 if (([name containsString:@"presentPaywall"] || [name containsString:@"PresentPaywall"]) && ret == 'v') {
-                    method_setImplementation(ms[i], imp_implementationWithBlock(^void(id s){ }));
+                    method_setImplementation(ms[i], (IMP)PaywallNoop);
+                    paywallHooks++;
                 }
             }
             free(ms);
         }
     }
+    L(@"paywall hooks: %d", paywallHooks);
+
     Class rnp = objc_getClass("RNPurchases");
-    if (!rnp) return;
-    SEL sel = sel_registerName("customerInfoWithResolve:reject:");
-    Method m = class_getInstanceMethod(rnp, sel);
-    if (!m) return;
-    id blk = ^(id _s, id resolve, id reject) {
-        if (resolve) ((void(^)(id))resolve)(FakeInfo());
-    };
-    method_setImplementation(m, imp_implementationWithBlock(blk));
+    L(rnp ? @"RNPurchases found" : @"RNPurchases MISSING");
+    if (!rnp) { dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 10*NSEC_PER_SEC), dispatch_get_main_queue(), ^{ Show(); }); return; }
+
+    gSend = Replace(rnp, sel_registerName("sendEventWithName:body:"), (IMP)SendHook);
+    gUpdated = Replace(rnp, sel_registerName("purchases:receivedUpdatedCustomerInfo:"), (IMP)UpdatedHook);
+    Replace(rnp, sel_registerName("invalidateCustomerInfoCache"), (IMP)InvalidateNoop);
+    L(@"hooks: send=%@ delegate=%@", gSend?@"ok":@"MISSING", gUpdated?@"ok":@"MISSING");
+
+    Method mp = class_getInstanceMethod(rnp, sel_registerName("customerInfoWithResolve:reject:"));
+    if (mp) { method_setImplementation(mp, (IMP)PromiseHook); L(@"promise hooked"); }
+    else L(@"promise method MISSING");
+
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 10*NSEC_PER_SEC), dispatch_get_main_queue(), ^{ Show(); });
 }
