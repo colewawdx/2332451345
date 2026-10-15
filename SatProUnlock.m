@@ -38,6 +38,24 @@ static NSDictionary *FakeInfo(void) {
 }
 
 __attribute__((constructor)) static void Init(void) {
+    // Kill paywall presentation (void methods only, no crash risk)
+    for (NSString *cn in @[@"RCPaywalls", @"RNPaywalls"]) {
+        Class c = objc_getClass([cn UTF8String]);
+        if (!c) continue;
+        for (NSNumber *isMeta in @[@0, @1]) {
+            Class k = [isMeta boolValue] ? object_getClass(c) : c;
+            unsigned int n = 0;
+            Method *ms = class_copyMethodList(k, &n);
+            for (unsigned int i = 0; i < n; i++) {
+                NSString *name = NSStringFromSelector(method_getName(ms[i]));
+                char ret = *method_copyReturnType(ms[i]);
+                if (([name containsString:@"presentPaywall"] || [name containsString:@"PresentPaywall"]) && ret == 'v') {
+                    method_setImplementation(ms[i], imp_implementationWithBlock(^void(id s){ }));
+                }
+            }
+            free(ms);
+        }
+    }
     Class rnp = objc_getClass("RNPurchases");
     if (!rnp) return;
     SEL sel = sel_registerName("customerInfoWithResolve:reject:");
