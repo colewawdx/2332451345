@@ -49,9 +49,35 @@ __attribute__((constructor)) static void Init(void) {
         Method *ms = class_copyMethodList(rnp, &n);
         for (unsigned int i = 0; i < n; i++) {
             NSString *name = NSStringFromSelector(method_getName(ms[i]));
-            if ([name containsString:@"ustomerInfo"]) L([@"RNP " stringByAppendingString:name]);
+            if ([name containsString:@"ustomerInfo"]) {
+                L([@"RNP " stringByAppendingString:name]);
+                if ([name isEqualToString:@"customerInfoWithResolve:reject:"]) {
+                    // Use method_exchange + forwardInvocation-free trick:
+                    // Replace with C function with EXACT signature via method_setImplementation + correct type encoding.
+                    const char *types = method_getTypeEncoding(ms[i]);
+                    L([NSString stringWithFormat:@"types %s", types]);
+                    // v@:@@ = void self,cmd,resolve,reject. Our block must match: use function pointer instead.
+                }
+            }
         }
         free(ms);
+        // Direct C-function hook with exact signature
+        SEL sel = sel_registerName("customerInfoWithResolve:reject:");
+        Method m = class_getInstanceMethod(rnp, sel);
+        if (m) {
+            NSDictionary *fake = @{
+                @"entitlements": @{ @"active": @{ @"SatSquatch Pro": @{
+                    @"expires_date": @"2031-01-01T00:00:00Z",
+                    @"product_identifier": @"satsquatchpro_ios_yearly",
+                    @"purchase_date": @"2026-10-05T05:09:10Z" } } }
+            };
+            id newImp = ^(id _s, id resolve, id reject) {
+                L(@"customerInfo called -> fake");
+                if (resolve) ((void(^)(id))resolve)(fake);
+            };
+            method_setImplementation(m, imp_implementationWithBlock(newImp));
+            L(@"HOOKED customerInfoWithResolve:reject:");
+        }
     } else L(@"no RNPurchases");
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 3*NSEC_PER_SEC), dispatch_get_main_queue(), ^{ Show(); });
 }
