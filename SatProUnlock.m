@@ -1,4 +1,4 @@
-// SatProUnlock v9-diag
+// SatProUnlock v10
 #import <Foundation/Foundation.h>
 #import <objc/runtime.h>
 #import <UIKit/UIKit.h>
@@ -11,8 +11,10 @@ static void L(NSString *fmt, ...) {
     va_list ap; va_start(ap, fmt);
     NSString *s = [[NSString alloc] initWithFormat:fmt arguments:ap];
     va_end(ap);
-    if (gLog.count < 80) {
-        [gLog addObject:[NSString stringWithFormat:@"%4.1fs %@", [NSDate timeIntervalSinceReferenceDate] - gT0, s]];
+    @synchronized(gLog) {
+        if (gLog.count < 100) {
+            [gLog addObject:[NSString stringWithFormat:@"%5.1fs %@", [NSDate timeIntervalSinceReferenceDate] - gT0, s]];
+        }
     }
 }
 
@@ -69,8 +71,6 @@ static void SendHook(id self, SEL _cmd, NSString *name, id body) {
     if ([name containsString:@"CustomerInfo"]) {
         if ([body isKindOfClass:[NSDictionary class]]) {
             L(@"SEND %@ keys=%@", name, [[(NSDictionary *)body allKeys] componentsJoinedByString:@"|"]);
-        } else {
-            L(@"SEND %@ class=%@", name, [body class]);
         }
         L(@"SEND %@ -> swapped", name);
         if (gSend) ((void(*)(id,SEL,id,id))gSend)(self, _cmd, name, FakeInfo());
@@ -96,9 +96,10 @@ static void InvalidateNoop(id self, SEL _cmd) { L(@"invalidateCache called"); }
 
 static void Show(void) {
     dispatch_async(dispatch_get_main_queue(), ^{
-        NSString *msg = [gLog componentsJoinedByString:@"\n"];
+        NSString *msg;
+        @synchronized(gLog) { msg = [gLog componentsJoinedByString:@"\n"]; }
         [[UIPasteboard generalPasteboard] setString:msg];
-        UIAlertController *a = [UIAlertController alertControllerWithTitle:@"SatPro v9-diag"
+        UIAlertController *a = [UIAlertController alertControllerWithTitle:@"SatPro v10"
             message:[msg stringByAppendingString:@"\n(copied)"] preferredStyle:UIAlertControllerStyleAlert];
         [a addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
         [a addAction:[UIAlertAction actionWithTitle:@"Refresh" style:UIAlertActionStyleDefault handler:^(UIAlertAction *act){ Show(); }]];
@@ -114,7 +115,23 @@ static void Show(void) {
 __attribute__((constructor)) static void Init(void) {
     gLog = [NSMutableArray array];
     gT0 = [NSDate timeIntervalSinceReferenceDate];
-    L(@"v9 loaded");
+    L(@"v10 loaded");
+
+    int num = objc_getClassList(NULL, 0);
+    Class *all = malloc(sizeof(Class) * num);
+    objc_getClassList(all, num);
+    for (int i = 0; i < num; i++) {
+        unsigned int mn = 0;
+        Method *ms = class_copyMethodList(all[i], &mn);
+        for (unsigned int j = 0; j < mn; j++) {
+            NSString *name = NSStringFromSelector(method_getName(ms[j]));
+            if ([name isEqualToString:@"encodeCustomerInfo:"]) {
+                L(@"encodeCustomerInfo: ON %s types %s", class_getName(all[i]), method_getTypeEncoding(ms[j]));
+            }
+        }
+        free(ms);
+    }
+    free(all);
 
     int paywallHooks = 0;
     for (NSString *cn in @[@"RCPaywalls", @"RNPaywalls"]) {
