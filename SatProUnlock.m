@@ -1,64 +1,94 @@
-// SatProUnlock v2 — hook the RNPurchases bridge + CustomerInfo fetch policy.
-// Feather-injected, app launches = dylib loads, v1 hooks missed (Swift structs).
-// This version: (1) NSLog proof-of-load, (2) swizzle customerInfoWithFetchPolicy:completion:
-// to return fake active CustomerInfo, (3) swizzle presentPaywallIfNeeded* to no-op.
+// SatProUnlock v3 — on-screen status (no PC tools needed) + presentPaywall kill + entitlement hooks.
 #import <Foundation/Foundation.h>
 #import <objc/runtime.h>
+#import <UIKit/UIKit.h>
 
-static NSString *kEnt = @"SatSquatch Pro";
+static NSMutableArray *gLog;
 
-static NSDictionary *FakeCustomerInfoDict(void) {
-    return @{
-        @"entitlements": @{ @"active": @{ kEnt: @{
-            @"expires_date": @"2031-01-01T00:00:00Z",
-            @"grace_period_expires_date": [NSNull null],
-            @"product_identifier": @"satsquatchpro_ios_yearly",
-            @"purchase_date": @"2026-10-05T05:09:10Z" } },
-            @"all": @{ kEnt: @{ @"expires_date": @"2031-01-01T00:00:00Z" } } },
-        @"subscriptions": @{ @"satsquatchpro_ios_yearly": @{
-            @"expires_date": @"2031-01-01T00:00:00Z",
-            @"purchase_date": @"2026-10-05T05:09:10Z",
-            @"store": @"app_store" } }
-    };
+static void Log(NSString *s) {
+    [gLog addObject:s];
+    NSLog(@"[SatPro] %@", s);
 }
 
-static void Swizzle(Class cls, SEL sel, id (^blk)(void)) {
-    if (!cls) return;
-    Method m = class_getInstanceMethod(cls, sel);
-    if (!m) m = class_getClassMethod(cls, sel);
-    if (!m) { NSLog(@"[SatPro] MISS %@ %@", cls, NSStringFromSelector(sel)); return; }
-    IMP imp = imp_implementationWithBlock(blk);
-    method_setImplementation(m, imp);
-    NSLog(@"[SatPro] hooked %@ %@", cls, NSStringFromSelector(sel));
+static void ShowAlert(void) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        NSString *msg = [gLog componentsJoinedByString:@"\n"];
+        UIAlertController *a = [UIAlertController alertControllerWithTitle:@"SatPro v3"
+            message:msg preferredStyle:UIAlertControllerStyleAlert];
+        [a addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
+        UIWindow *w = nil;
+        for (UIScene *sc in [UIApplication sharedApplication].connectedScenes) {
+            if ([sc isKindOfClass:[UIWindowScene class]]) {
+                w = ((UIWindowScene *)sc).keyWindow;
+                if (w) break;
+            }
+        }
+        if (!w) w = [UIApplication sharedApplication].keyWindow;
+        [w.rootViewController presentViewController:a animated:YES completion:nil];
+        // show again after 5s in case missed
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 5*NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+            [w.rootViewController presentViewController:a animated:YES completion:nil];
+        });
+    });
+}
+
+static NSDictionary *FakeActive(void) {
+    return @{ @"SatSquatch Pro": @{
+        @"expires_date": @"2031-01-01T00:00:00Z",
+        @"product_identifier": @"satsquatchpro_ios_yearly",
+        @"purchase_date": @"2026-10-05T05:09:10Z" } };
 }
 
 __attribute__((constructor)) static void Init(void) {
-    NSLog(@"[SatPro] dylib loaded");
-    // Kill paywall presentation (all variants)
+    gLog = [NSMutableArray array];
+    [gLog addObject:@"loaded"];
+    // Hook every presentPaywall* on RCPaywalls/RNPaywalls to no-op
+    int hooked = 0;
     for (NSString *cn in @[@"RCPaywalls", @"RNPaywalls"]) {
         Class c = objc_getClass([cn UTF8String]);
-        if (!c) { NSLog(@"[SatPro] no class %@", cn); continue; }
+        if (!c) { [gLog addObject:[@"no class " stringByAppendingString:cn]]; continue; }
         unsigned int n = 0;
-        Method *ms = class_copyMethodList(c, &n);
+        Method *ms = class_copyMethodList(object_getClass(c), &n);
+        // class methods (presentPaywall* are usually class funcs on RCPaywalls)
+        for (unsigned int i = 0; i < n; i++) {
+            NSString *name = NSStringFromSelector(method_getName(ms[i]));
+            if ([name containsString:@"presentPaywall"] || [name containsString:@"Paywall"]) {
+                method_setImplementation(ms[i], imp_implementationWithBlock(^void(id s){ }));
+                hooked++;
+                [gLog addObject:[@"hooked " stringByAppendingString:name]];
+            }
+        }
+        free(ms);
+        ms = class_copyMethodList(c, &n);
         for (unsigned int i = 0; i < n; i++) {
             NSString *name = NSStringFromSelector(method_getName(ms[i]));
             if ([name containsString:@"presentPaywall"]) {
-                IMP imp = imp_implementationWithBlock(^void(id s, id a, id b, id c2, id d) {
-                    NSLog(@"[SatPro] blocked %@", name);
-                });
-                method_setImplementation(ms[i], imp);
-                NSLog(@"[SatPro] hooked %@", name);
+                method_setImplementation(ms[i], imp_implementationWithBlock(^void(id s){ }));
+                hooked++;
+                [gLog addObject:[@"hooked inst " stringByAppendingString:name]];
             }
         }
         free(ms);
     }
-    // Force customerInfo fetch to return fake active info is hard generically;
-    // instead hook RNPurchases getCustomerInfo resolver to call completion with fake dict.
-    Class rnp = objc_getClass("RNPurchases");
-    if (rnp) {
-        // Just log — the real patch: hook the completion block path is version-specific.
-        NSLog(@"[SatPro] RNPurchases found");
+    // Hook RCEntitlementInfos.active + all + RCCustomerInfo.entitlements
+    Class ei = objc_getClass("RCEntitlementInfos");
+    if (!ei) ei = objc_getClass("RevenueCat.EntitlementInfos");
+    if (ei) {
+        for (NSString *mn in @[@"active", @"all", @"allEntitlements"]) {
+            SEL sel = sel_registerName([mn UTF8String]);
+            Method m = class_getInstanceMethod(ei, sel);
+            if (m) {
+                method_setImplementation(m, imp_implementationWithBlock(^id(id s){ return FakeActive(); }));
+                hooked++;
+                [gLog addObject:[@"hooked EI." stringByAppendingString:mn]];
+            } else {
+                [gLog addObject:[@"miss EI." stringByAppendingString:mn]];
+            }
+        }
     } else {
-        NSLog(@"[SatPro] RNPurchases MISSING");
+        [gLog addObject:@"no RCEntitlementInfos class"];
     }
+    [gLog addObject:[NSString stringWithFormat:@"total %d", hooked]];
+    // show 3s after launch
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 3*NSEC_PER_SEC), dispatch_get_main_queue(), ^{ ShowAlert(); });
 }
