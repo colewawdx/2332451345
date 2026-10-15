@@ -1,0 +1,17 @@
+name: Build SatProUnlock dylib
+on:
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build dylib
+        run: |
+          clang -arch arm64 -dynamiclib -framework Foundation \
+            -o SatProUnlock.dylib SatProUnlock.m
+          file SatProUnlock.dylib
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SatProUnlock-dylib
+          path: SatProUnlock.dylib
