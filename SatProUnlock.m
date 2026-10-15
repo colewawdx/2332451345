@@ -74,6 +74,6 @@ __attribute__((constructor)) static void Init(void) {
         [gLog addObject:@"no RCEntitlementInfos class"];
     }
     [gLog addObject:[NSString stringWithFormat:@"total %d", hooked]];
-    // show 3s after launch
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 3*NSEC_PER_SEC), dispatch_get_main_queue(), ^{ ShowAlert(); });
+    DumpLog();
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 3*NSEC_PER_SEC), dispatch_get_main_queue(), ^{ DumpLog(); });
 }
